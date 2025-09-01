@@ -289,9 +289,11 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> motions, // [..., N, 3] optional
     const at::optional<at::Tensor> covars, // [..., N, 6] optional
     const at::optional<at::Tensor> quats,  // [..., N, 4] optional
     const at::optional<at::Tensor> scales, // [..., N, 3] optional
@@ -305,10 +307,14 @@ projection_ewa_3dgs_packed_fwd(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
+    const bool calc_flows2d,
     const CameraModelType camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
+    if (motions.has_value()) {
+        CHECK_INPUT(motions.value());
+    }
     if (covars.has_value()) {
         CHECK_INPUT(covars.value());
     } else {
@@ -337,6 +343,7 @@ projection_ewa_3dgs_packed_fwd(
         launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,
+            motions,
             covars,
             quats,
             scales,
@@ -360,6 +367,9 @@ projection_ewa_3dgs_packed_fwd(
             c10::nullopt, // radii
             c10::nullopt, // means2d
             c10::nullopt, // depths
+            // pass in as an indicator on whether flows2d will be calculated or not.
+            calc_flows2d ? at::optional<at::Tensor>(at::empty({1}, opt))
+                         : c10::nullopt, // flows2d
             c10::nullopt, // conics
             // pass in as an indicator on whether compensation will be applied or not.
             calc_compensations ? at::optional<at::Tensor>(at::empty({1}, opt))
@@ -379,6 +389,10 @@ projection_ewa_3dgs_packed_fwd(
     at::Tensor radii = at::empty({nnz, 2}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
+    at::Tensor flows2d;
+    if (calc_flows2d) {
+        flows2d = at::empty({nnz, 2}, opt);
+    }
     at::Tensor conics = at::empty({nnz, 3}, opt);
     at::Tensor compensations;
     if (calc_compensations) {
@@ -390,6 +404,7 @@ projection_ewa_3dgs_packed_fwd(
         launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,
+            motions,
             covars,
             quats,
             scales,
@@ -413,6 +428,8 @@ projection_ewa_3dgs_packed_fwd(
             radii,
             means2d,
             depths,
+            calc_flows2d ? at::optional<at::Tensor>(flows2d)
+                         : c10::nullopt,
             conics,
             calc_compensations ? at::optional<at::Tensor>(compensations)
                                : c10::nullopt
@@ -429,15 +446,23 @@ projection_ewa_3dgs_packed_fwd(
         radii,
         means2d,
         depths,
+        flows2d,
         conics,
         compensations
     );
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::optional<at::Tensor>>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> motions, // [..., N, 3] optional
     const at::optional<at::Tensor> covars, // [..., N, 6]
     const at::optional<at::Tensor> quats,  // [..., N, 4]
     const at::optional<at::Tensor> scales, // [..., N, 3]
@@ -448,14 +473,15 @@ projection_ewa_3dgs_packed_bwd(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor batch_ids,                     // [nnz]
-    const at::Tensor camera_ids,                    // [nnz]
-    const at::Tensor gaussian_ids,                  // [nnz]
-    const at::Tensor conics,                        // [nnz, 3]
-    const at::optional<at::Tensor> compensations,   // [nnz] optional
+    const at::Tensor batch_ids,                   // [nnz]
+    const at::Tensor camera_ids,                  // [nnz]
+    const at::Tensor gaussian_ids,                // [nnz]
+    const at::Tensor conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> compensations, // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::optional<at::Tensor> v_flows2d,       // [nnz, 2] optional
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
@@ -478,6 +504,9 @@ projection_ewa_3dgs_packed_bwd(
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    if (v_flows2d.has_value()) {
+        CHECK_INPUT(v_flows2d.value());
+    }
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -489,7 +518,7 @@ projection_ewa_3dgs_packed_bwd(
 
     auto opt = means.options();
     uint32_t nnz = batch_ids.size(0);
-    at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
+    at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats, v_motions;
     if (sparse_grad) {
         v_means = at::zeros({nnz, 3}, opt);
         if (covars.has_value()) {
@@ -497,6 +526,9 @@ projection_ewa_3dgs_packed_bwd(
         } else {
             v_quats = at::zeros({nnz, 4}, opt);
             v_scales = at::zeros({nnz, 3}, opt);
+        }
+        if (v_flows2d.has_value()) {
+            v_motions = at::zeros({nnz, 3}, opt);
         }
     } else {
         v_means = at::zeros_like(means);
@@ -506,6 +538,9 @@ projection_ewa_3dgs_packed_bwd(
             v_quats = at::zeros_like(quats.value(), opt);
             v_scales = at::zeros_like(scales.value(), opt);
         }
+        if (v_flows2d.has_value()) {
+            v_motions = at::zeros_like(means, opt);
+        }
     }
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats, opt);
@@ -514,6 +549,7 @@ projection_ewa_3dgs_packed_bwd(
     launch_projection_ewa_3dgs_packed_bwd_kernel(
         // fwd inputs
         means,
+        motions,
         covars,
         quats,
         scales,
@@ -532,6 +568,7 @@ projection_ewa_3dgs_packed_bwd(
         // grad outputs
         v_means2d,
         v_depths,
+        v_flows2d,
         v_conics,
         v_compensations,
         sparse_grad,
@@ -541,9 +578,11 @@ projection_ewa_3dgs_packed_bwd(
         v_quats.defined() ? at::optional<at::Tensor>(v_quats) : c10::nullopt,
         v_scales.defined() ? at::optional<at::Tensor>(v_scales) : c10::nullopt,
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
+                             : c10::nullopt,
+        v_motions.defined() ? at::optional<at::Tensor>(v_motions)
                              : c10::nullopt
     );
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats, v_motions);
 }
 
 std::tuple<

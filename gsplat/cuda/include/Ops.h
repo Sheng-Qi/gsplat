@@ -104,9 +104,11 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                   // [..., N, 3]
+    const at::optional<at::Tensor> motions,   // [..., N, 3] optional
     const at::optional<at::Tensor> covars,    // [..., N, 6] optional
     const at::optional<at::Tensor> quats,     // [..., N, 4] optional
     const at::optional<at::Tensor> scales,    // [..., N, 3] optional
@@ -120,12 +122,21 @@ projection_ewa_3dgs_packed_fwd(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
+    const bool calc_flows2d,
     const CameraModelType camera_model
 );
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::optional<at::Tensor>
+>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> motions, // [..., N, 3] optional
     const at::optional<at::Tensor> covars, // [..., N, 6]
     const at::optional<at::Tensor> quats,  // [..., N, 4]
     const at::optional<at::Tensor> scales, // [..., N, 3]
@@ -144,6 +155,7 @@ projection_ewa_3dgs_packed_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::optional<at::Tensor> v_flows2d,       // [nnz, 2] optional
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,

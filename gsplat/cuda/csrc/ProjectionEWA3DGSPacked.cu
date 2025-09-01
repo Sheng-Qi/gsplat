@@ -19,6 +19,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const scalar_t *__restrict__ means,    // [B, N, 3]
+    const scalar_t *__restrict__ motions,  // [B, N, 3] Optional
     const scalar_t *__restrict__ covars,   // [B, N, 6] Optional
     const scalar_t *__restrict__ quats,    // [B, N, 4] Optional
     const scalar_t *__restrict__ scales,   // [B, N, 3] Optional
@@ -43,6 +44,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     int32_t *__restrict__ radii,         // [nnz, 2]
     scalar_t *__restrict__ means2d,      // [nnz, 2]
     scalar_t *__restrict__ depths,       // [nnz]
+    scalar_t *__restrict__ flows2d,      // [nnz, 2] Optional
     scalar_t *__restrict__ conics,       // [nnz, 3]
     scalar_t *__restrict__ compensations // [nnz] optional
 ) {
@@ -63,6 +65,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     if (valid) {
         // shift pointers to the current camera and gaussian
         means += bid * N * 3 + gid * 3;
+        motions += bid * N * 3 + gid * 3;
         viewmats += bid * C * 16 + cid * 16;
 
         // glm is column-major but input is row-major
@@ -244,6 +247,17 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
+            if (flows2d != nullptr) {
+                vec3 motion = glm::make_vec3(motions);
+                vec3 motion_c = R * motion;
+                float iz  = 1.0f / mean_c.z;
+                float iz2 = iz * iz;
+                float fx = Ks[0], fy = Ks[4];
+                float flow_x = fx * iz * motion_c.x - (fx * mean_c.x * iz2) * motion_c.z;
+                float flow_y = fy * iz * motion_c.y - (fy * mean_c.y * iz2) * motion_c.z;
+                flows2d[thread_data*2    ] = flow_x;
+                flows2d[thread_data*2 + 1] = flow_y;
+            }
             conics[thread_data * 3] = covar2d_inv[0][0];
             conics[thread_data * 3 + 1] = covar2d_inv[0][1];
             conics[thread_data * 3 + 2] = covar2d_inv[1][1];
@@ -266,6 +280,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
     const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> motions, // [..., N, 3] optional
     const at::optional<at::Tensor> covars, // [..., N, 6] optional
     const at::optional<at::Tensor> quats,  // [..., N, 4] optional
     const at::optional<at::Tensor> scales, // [..., N, 3] optional
@@ -290,6 +305,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> radii,        // [nnz, 2]
     at::optional<at::Tensor> means2d,      // [nnz, 2]
     at::optional<at::Tensor> depths,       // [nnz]
+    at::optional<at::Tensor> flows2d,      // [nnz, 2] optional
     at::optional<at::Tensor> conics,       // [nnz, 3]
     at::optional<at::Tensor> compensations // [nnz] optional
 ) {
@@ -324,6 +340,8 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                     C,
                     N,
                     means.data_ptr<scalar_t>(),
+                    motions.has_value() ? motions.value().data_ptr<scalar_t>()
+                                       : nullptr,
                     covars.has_value() ? covars.value().data_ptr<scalar_t>()
                                        : nullptr,
                     quats.has_value() ? quats.value().data_ptr<scalar_t>()
@@ -364,6 +382,8 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                                         : nullptr,
                     depths.has_value() ? depths.value().data_ptr<scalar_t>()
                                        : nullptr,
+                    flows2d.has_value() ? flows2d.value().data_ptr<scalar_t>()
+                                        : nullptr,
                     conics.has_value() ? conics.value().data_ptr<scalar_t>()
                                        : nullptr,
                     compensations.has_value()
@@ -382,6 +402,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     const uint32_t N,
     const uint32_t nnz,
     const scalar_t *__restrict__ means,    // [B, N, 3]
+    const scalar_t *__restrict__ motions,  // [B, N, 3] Optional
     const scalar_t *__restrict__ covars,   // [B, N, 6] Optional
     const scalar_t *__restrict__ quats,    // [B, N, 4] Optional
     const scalar_t *__restrict__ scales,   // [B, N, 3] Optional
@@ -400,6 +421,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     // grad outputs
     const scalar_t *__restrict__ v_means2d,       // [nnz, 2]
     const scalar_t *__restrict__ v_depths,        // [nnz]
+    const scalar_t *__restrict__ v_flows2d,       // [nnz, 2] optional
     const scalar_t *__restrict__ v_conics,        // [nnz, 3]
     const scalar_t *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
@@ -408,7 +430,8 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     scalar_t *__restrict__ v_covars,  // [B, N, 6] or [nnz, 6] Optional
     scalar_t *__restrict__ v_quats,   // [B, N, 4] or [nnz, 4] Optional
     scalar_t *__restrict__ v_scales,  // [B, N, 3] or [nnz, 3] Optional
-    scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] Optional
+    scalar_t *__restrict__ v_viewmats, // [B, C, 4, 4] Optional
+    scalar_t *__restrict__ v_motions  // [B, N, 3] or [nnz, 3] Optional
 ) {
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -421,6 +444,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
     // shift pointers to the current camera and gaussian
     means += bid * N * 3 + gid * 3;
+    motions += bid * N * 3 + gid * 3;
     viewmats += bid * C * 16 + cid * 16;
     Ks += bid * C * 9 + cid * 9;
 
@@ -428,6 +452,8 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
     v_means2d += idx * 2;
     v_depths += idx;
+    if (v_flows2d != nullptr)
+        v_flows2d += idx * 2;
     v_conics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
@@ -541,14 +567,46 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         break;
     }
 
-    // add contribution from v_depths
-    v_mean_c.z += v_depths[0];
-
-    // vjp: transform Gaussian covariance to camera space
     vec3 v_mean(0.f);
     mat3 v_covar(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
+    vec3 v_motion(0.f);
+
+    // add contribution from v_depths
+    v_mean_c.z += v_depths[0];
+
+    if (motions != nullptr && v_motions != nullptr) {
+        float v_flow_x = v_flows2d[0];
+        float v_flow_y = v_flows2d[1];
+        vec3 motion = glm::make_vec3(motions);
+        vec3 motion_c = R * motion;
+        float iz  = 1.0f / mean_c.z;
+        float iz2 = iz * iz;
+        float iz3 = iz * iz2;
+
+        vec3 v_motion_c(0.f);
+        v_motion_c.x  = v_flow_x * fx * iz;
+        v_motion_c.y  = v_flow_y * fy * iz;
+        v_motion_c.z  = v_flow_x * ( -fx * mean_c.x * iz2 )
+                      + v_flow_y * ( -fy * mean_c.y * iz2 );
+
+        v_mean_c.x   += v_flow_x * ( -fx * iz2 * motion_c.z );
+        v_mean_c.y   += v_flow_y * ( -fy * iz2 * motion_c.z );
+        v_mean_c.z   += v_flow_x * ( -fx * motion_c.x * iz2
+                                     + 2.f * fx * mean_c.x * motion_c.z * iz3 )
+                      + v_flow_y * ( -fy * motion_c.y * iz2
+                                     + 2.f * fy * mean_c.y * motion_c.z * iz3 );
+        mat3 Rt = glm::transpose(R);
+        v_motion = Rt * v_motion_c;
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                v_R[i][j] += motion[j] * v_motion_c[i];
+            }
+        }
+    }
+
+    // vjp: transform Gaussian covariance to camera space
     posW2C_VJP(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covarW2C_VJP(R, covar, v_covar_c, v_R, v_covar);
 
@@ -561,6 +619,12 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
             for (uint32_t i = 0; i < 3; i++) {
                 v_means[i] = v_mean[i];
             }
+        }
+        if (v_motions != nullptr) {
+            v_motions += idx * 3;
+            v_motions[0] += v_motion.x;
+            v_motions[1] += v_motion.y;
+            v_motions[2] += v_motion.z;
         }
         if (v_covars != nullptr) {
             v_covars += idx * 6;
@@ -600,6 +664,15 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
                 for (uint32_t i = 0; i < 3; i++) {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
                 }
+            }
+        }
+        if (v_motions != nullptr) {
+            warpSum(v_motion, warp_group_g);
+            if (warp_group_g.thread_rank() == 0) {
+                scalar_t* dst = v_motions + bid * N * 3 + gid * 3;
+                gpuAtomicAdd(dst + 0, v_motion.x);
+                gpuAtomicAdd(dst + 1, v_motion.y);
+                gpuAtomicAdd(dst + 2, v_motion.z);
             }
         }
         if (v_covars != nullptr) {
@@ -659,6 +732,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> motions, // [..., N, 3]
     const at::optional<at::Tensor> covars, // [..., N, 6]
     const at::optional<at::Tensor> quats,  // [..., N, 4]
     const at::optional<at::Tensor> scales, // [..., N, 3]
@@ -677,6 +751,7 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::optional<at::Tensor> v_flows2d,       // [nnz, 2] optional
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool sparse_grad,
@@ -685,7 +760,8 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     at::optional<at::Tensor> v_covars,  // [..., N, 6] or [nnz, 6] Optional
     at::optional<at::Tensor> v_quats,   // [..., N, 4] or [nnz, 4] Optional
     at::optional<at::Tensor> v_scales,  // [..., N, 3] or [nnz, 3] Optional
-    at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_viewmats, // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_motions  // [..., N, 3] or [nnz, 3] Optional
 ) {
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t C = viewmats.size(-3);       // number of cameras
@@ -715,6 +791,8 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                     N,
                     nnz,
                     means.data_ptr<scalar_t>(),
+                    motions.has_value() ? motions.value().data_ptr<scalar_t>()
+                                       : nullptr,
                     covars.has_value() ? covars.value().data_ptr<scalar_t>()
                                        : nullptr,
                     covars.has_value() ? nullptr
@@ -736,6 +814,8 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                         : nullptr,
                     v_means2d.data_ptr<scalar_t>(),
                     v_depths.data_ptr<scalar_t>(),
+                    v_flows2d.has_value() ? v_flows2d.value().data_ptr<scalar_t>()
+                                          : nullptr,
                     v_conics.data_ptr<scalar_t>(),
                     v_compensations.has_value()
                         ? v_compensations.value().data_ptr<scalar_t>()
@@ -750,6 +830,9 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                                        : v_scales.value().data_ptr<scalar_t>(),
                     v_viewmats.has_value()
                         ? v_viewmats.value().data_ptr<scalar_t>()
+                        : nullptr,
+                    v_motions.has_value()
+                        ? v_motions.value().data_ptr<scalar_t>()
                         : nullptr
                 );
         }

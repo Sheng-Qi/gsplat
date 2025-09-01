@@ -301,9 +301,11 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
+    calc_flows2d: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     opacities: Optional[Tensor] = None,  # [..., N] or None
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    motions: Optional[Tensor] = None,  # [..., N, 3] or None
+):
     """Projects Gaussians to 2D.
 
     This function fuse the process of computing covariances
@@ -393,6 +395,9 @@ def fully_fused_projection(
     if opacities is not None:
         assert opacities.shape == batch_dims + (N,), opacities.shape
         opacities = opacities.contiguous()
+    if motions is not None:
+        assert motions.shape == batch_dims + (N, 3), motions.shape
+        motions = motions.contiguous()
 
     assert (
         camera_model != "ftheta"
@@ -416,10 +421,13 @@ def fully_fused_projection(
             radius_clip,
             sparse_grad,
             calc_compensations,
+            calc_flows2d,
             camera_model,
             opacities,
+            motions,
         )
     else:
+        assert not calc_flows2d, "calc_flows2d is not currently supported when packed is False"
         return _FullyFusedProjection.apply(
             means,
             covars,
@@ -595,7 +603,9 @@ def rasterize_to_pixels(
         assert colors.shape == image_dims + (N, channels), colors.shape
         assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        # TODO: if packed, original assertion would raise error. Fix later if needed.
+        # assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        assert backgrounds.dim() == 2 and backgrounds.shape[1] == channels, backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
@@ -1596,9 +1606,11 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
+        calc_flows2d: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        motions: Optional[Tensor] = None,  # [..., N, 3] or None
+    ):
         assert (
             camera_model != "ftheta"
         ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
@@ -1615,10 +1627,12 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radii,
             means2d,
             depths,
+            flows2d,
             conics,
             compensations,
         ) = _make_lazy_cuda_func("projection_ewa_3dgs_packed_fwd")(
             means,
+            motions, # optional
             covars,  # optional
             quats,  # optional
             scales,  # optional
@@ -1632,15 +1646,19 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             far_plane,
             radius_clip,
             calc_compensations,
+            calc_flows2d,
             camera_model_type,
         )
         if not calc_compensations:
             compensations = None
+        if not calc_flows2d:
+            flows2d = None
         ctx.save_for_backward(
             batch_ids,
             camera_ids,
             gaussian_ids,
             means,
+            motions,
             covars,
             quats,
             scales,
@@ -1662,6 +1680,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radii,
             means2d,
             depths,
+            flows2d,
             conics,
             compensations,
         )
@@ -1675,6 +1694,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_radii,
         v_means2d,
         v_depths,
+        v_flows2d,
         v_conics,
         v_compensations,
     ):
@@ -1683,6 +1703,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             camera_ids,
             gaussian_ids,
             means,
+            motions,
             covars,
             quats,
             scales,
@@ -1699,10 +1720,11 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
 
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
-        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_covars, v_quats, v_scales, v_viewmats, v_motions = _make_lazy_cuda_func(
             "projection_ewa_3dgs_packed_bwd"
         )(
             means,
+            motions,
             covars,
             quats,
             scales,
@@ -1719,6 +1741,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_flows2d.contiguous() if v_flows2d is not None else None,
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
@@ -1793,6 +1816,8 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             None,
             None,
             None,
+            None,
+            v_motions,
         )
 
 

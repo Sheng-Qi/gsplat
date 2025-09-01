@@ -48,7 +48,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -59,6 +59,8 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    # flow
+    motions: Optional[Tensor] = None,  # [..., N, 3] or None
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -285,7 +287,12 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF"], render_mode
+    
+    calc_flow2d = render_mode in ["RGB+F", "F", "RGB+DF"]
+    if calc_flow2d:
+        assert motions is not None
+        assert motions.shape == batch_dims + (N, 3), motions.shape
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -381,6 +388,7 @@ def rasterization(
         C = len(viewmats)
 
     if with_ut:
+        assert not calc_flow2d, "calc_flow2d is not supported with with_ut."
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,
@@ -421,9 +429,11 @@ def rasterization(
             far_plane=far_plane,
             radius_clip=radius_clip,
             sparse_grad=sparse_grad,
+            calc_flows2d=calc_flow2d,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
+            motions=motions,
         )
 
     if packed:
@@ -435,12 +445,14 @@ def rasterization(
             radii,
             means2d,
             depths,
+            flows2d,
             conics,
             compensations,
         ) = proj_results
         opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
         image_ids = batch_ids * C + camera_ids
     else:
+        flows2d = None
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
         opacities = torch.broadcast_to(
@@ -462,6 +474,7 @@ def rasterization(
             "radii": radii,
             "means2d": means2d,
             "depths": depths,
+            "flows2d": flows2d,
             "conics": conics,
             "opacities": opacities,
         }
@@ -625,6 +638,33 @@ def rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
+    elif render_mode in ["F"]:
+        assert (flows2d is not None), "Expected flows2d to be computed for F mode."
+        colors = flows2d
+        if backgrounds is not None:
+            backgrounds = torch.zeros(batch_dims + (C, 2), device=backgrounds.device)
+    elif render_mode in ["RGB+F"]:
+        assert (flows2d is not None), "Expected flows2d to be computed for RGB+F mode."
+        colors = torch.cat((colors, flows2d), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(batch_dims + (C, 2), device=backgrounds.device),
+                ],
+                dim=-1,
+            )
+    elif render_mode in ["RGB+DF"]:
+        assert (flows2d is not None), "Expected flows2d to be computed for RGB+DF mode."
+        colors = torch.cat((colors, depths[..., None], flows2d), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(batch_dims + (C, 3), device=backgrounds.device),
+                ],
+                dim=-1,
+            )
     else:  # RGB
         pass
 
