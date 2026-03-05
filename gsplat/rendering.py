@@ -48,7 +48,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF", "RGB+EDF"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -287,9 +287,9 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+F", "F", "RGB+DF", "RGB+EDF"], render_mode
     
-    calc_flow2d = render_mode in ["RGB+F", "F", "RGB+DF"]
+    calc_flow2d = render_mode in ["RGB+F", "F", "RGB+DF", "RGB+EDF"]
     if calc_flow2d:
         assert motions is not None
         assert motions.shape == batch_dims + (N, 3), motions.shape
@@ -654,7 +654,7 @@ def rasterization(
                 ],
                 dim=-1,
             )
-    elif render_mode in ["RGB+DF"]:
+    elif render_mode in ["RGB+DF", "RGB+EDF"]:
         assert (flows2d is not None), "Expected flows2d to be computed for RGB+DF mode."
         colors = torch.cat((colors, depths[..., None], flows2d), dim=-1)
         if backgrounds is not None:
@@ -797,7 +797,7 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    if render_mode in ["ED", "RGB+ED"]:
+    if render_mode in ["ED", "RGB+ED", "RGB+EDF"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
