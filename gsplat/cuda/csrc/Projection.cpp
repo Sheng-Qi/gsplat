@@ -1,3 +1,21 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
@@ -5,21 +23,28 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/torch.h>
 
 #include "Common.h"     // where all the macros are defined
 #include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
 #include "Cameras.h"
+#include "Lidars.h"
+#include "Lidars.cuh"
+#include "Config.h"
+
 
 namespace gsplat {
 
+#if GSPLAT_BUILD_3DGS
+
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
-    const at::Tensor means,  // [..., C, N, 3]
-    const at::Tensor covars, // [..., C, N, 3, 3]
-    const at::Tensor Ks,     // [..., C, 3, 3]
-    const uint32_t width,
-    const uint32_t height,
-    const CameraModelType camera_model
+    const at::Tensor &means,  // [..., C, N, 3]
+    const at::Tensor &covars, // [..., C, N, 3, 3]
+    const at::Tensor &Ks,     // [..., C, 3, 3]
+    int64_t width,
+    int64_t height,
+    int64_t camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -46,7 +71,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
         Ks,
         width,
         height,
-        camera_model,
+        static_cast<CameraModelType>(camera_model),
         // outputs
         means2d,
         covars2d
@@ -55,14 +80,14 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
-    const at::Tensor means,  // [..., C, N, 3]
-    const at::Tensor covars, // [..., C, N, 3, 3]
-    const at::Tensor Ks,     // [..., C, 3, 3]
-    const uint32_t width,
-    const uint32_t height,
-    const CameraModelType camera_model,
-    const at::Tensor v_means2d, // [..., C, N, 2]
-    const at::Tensor v_covars2d // [..., C, N, 2, 2]
+    const at::Tensor &means,  // [..., C, N, 3]
+    const at::Tensor &covars, // [..., C, N, 3, 3]
+    const at::Tensor &Ks,     // [..., C, 3, 3]
+    int64_t width,
+    int64_t height,
+    int64_t camera_model,
+    at::Tensor &v_means2d, // [..., C, N, 2]
+    at::Tensor &v_covars2d // [..., C, N, 2, 2]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -91,7 +116,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
         Ks,
         width,
         height,
-        camera_model,
+        static_cast<CameraModelType>(camera_model),
         v_means2d,
         v_covars2d,
         // outputs
@@ -108,21 +133,21 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
-    const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> covars, // [..., N, 6] optional
-    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
-    const at::optional<at::Tensor> scales, // [..., N, 3] optional
-    const at::optional<at::Tensor> opacities, // [..., N] optional
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip,
-    const bool calc_compensations,
-    const CameraModelType camera_model
+    const at::Tensor &means,                // [..., N, 3]
+    const at::optional<at::Tensor> &covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> &scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> &opacities, // [..., N] optional
+    const at::Tensor &viewmats,             // [..., C, 4, 4]
+    const at::Tensor &Ks,                   // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    double near_plane,
+    double far_plane,
+    double radius_clip,
+    bool calc_compensations,
+    int64_t camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -176,7 +201,7 @@ projection_ewa_3dgs_fused_fwd(
         near_plane,
         far_plane,
         radius_clip,
-        camera_model,
+        static_cast<CameraModelType>(camera_model),
         // outputs
         radii,
         means2d,
@@ -191,26 +216,26 @@ projection_ewa_3dgs_fused_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
-    const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> covars, // [..., N, 6] optional
-    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
-    const at::optional<at::Tensor> scales, // [..., N, 3] optional
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const CameraModelType camera_model,
+    const at::Tensor &means,                // [..., N, 3]
+    const at::optional<at::Tensor> &covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> &scales, // [..., N, 3] optional
+    const at::Tensor &viewmats,             // [..., C, 4, 4]
+    const at::Tensor &Ks,                   // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    int64_t camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [..., C, N, 2]
-    const at::Tensor conics,                      // [..., C, N, 3]
-    const at::optional<at::Tensor> compensations, // [..., C, N] optional
+    const at::Tensor &radii,                       // [..., C, N, 2]
+    const at::Tensor &conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> &compensations, // [..., C, N] optional
     // grad outputs
-    const at::Tensor v_means2d,                     // [..., C, N, 2]
-    const at::Tensor v_depths,                      // [..., C, N]
-    const at::Tensor v_conics,                      // [..., C, N, 3]
-    const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
-    const bool viewmats_requires_grad
+    const at::Tensor &v_means2d,                     // [..., C, N, 2]
+    const at::Tensor &v_depths,                      // [..., C, N]
+    const at::Tensor &v_conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> &v_compensations, // [..., C, N] optional
+    bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -260,7 +285,7 @@ projection_ewa_3dgs_fused_bwd(
         image_width,
         image_height,
         eps2d,
-        camera_model,
+        static_cast<CameraModelType>(camera_model),
         radii,
         conics,
         compensations,
@@ -292,23 +317,23 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
-    const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> motions, // [..., N, 3] optional
-    const at::optional<at::Tensor> covars, // [..., N, 6] optional
-    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
-    const at::optional<at::Tensor> scales, // [..., N, 3] optional
-    const at::optional<at::Tensor> opacities, // [..., N] optional
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip,
-    const bool calc_compensations,
-    const bool calc_flows2d,
-    const CameraModelType camera_model
+    const at::Tensor &means,                // [..., N, 3]
+    const at::optional<at::Tensor> &motions,   // [..., N, 3] optional
+    const at::optional<at::Tensor> &covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> &scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> &opacities, // [..., N] optional
+    const at::Tensor &viewmats,             // [..., C, 4, 4]
+    const at::Tensor &Ks,                   // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    double near_plane,
+    double far_plane,
+    double radius_clip,
+    bool calc_compensations,
+    bool calc_flows2d,
+    int64_t camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -357,7 +382,7 @@ projection_ewa_3dgs_packed_fwd(
             far_plane,
             radius_clip,
             c10::nullopt, // block_accum
-            camera_model,
+            static_cast<CameraModelType>(camera_model),
             // outputs
             block_cnts,
             c10::nullopt, // indptr
@@ -418,7 +443,7 @@ projection_ewa_3dgs_packed_fwd(
             far_plane,
             radius_clip,
             block_accum,
-            camera_model,
+            static_cast<CameraModelType>(camera_model),
             // outputs
             c10::nullopt, // block_cnts
             indptr,
@@ -461,31 +486,31 @@ std::tuple<
     at::optional<at::Tensor>>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> motions, // [..., N, 3] optional
-    const at::optional<at::Tensor> covars, // [..., N, 6]
-    const at::optional<at::Tensor> quats,  // [..., N, 4]
-    const at::optional<at::Tensor> scales, // [..., N, 3]
-    const at::Tensor viewmats,             // [..., C, 4, 4]
-    const at::Tensor Ks,                   // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const CameraModelType camera_model,
+    const at::Tensor &means,                // [..., N, 3]
+    const at::optional<at::Tensor> &motions,   // [..., N, 3] optional
+    const at::optional<at::Tensor> &covars, // [..., N, 6]
+    const at::optional<at::Tensor> &quats,  // [..., N, 4]
+    const at::optional<at::Tensor> &scales, // [..., N, 3]
+    const at::Tensor &viewmats,             // [..., C, 4, 4]
+    const at::Tensor &Ks,                   // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    int64_t camera_model,
     // fwd outputs
-    const at::Tensor batch_ids,                   // [nnz]
-    const at::Tensor camera_ids,                  // [nnz]
-    const at::Tensor gaussian_ids,                // [nnz]
-    const at::Tensor conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> compensations, // [nnz] optional
+    const at::Tensor &batch_ids,                     // [nnz]
+    const at::Tensor &camera_ids,                    // [nnz]
+    const at::Tensor &gaussian_ids,                  // [nnz]
+    const at::Tensor &conics,                        // [nnz, 3]
+    const at::optional<at::Tensor> &compensations,   // [nnz] optional
     // grad outputs
-    const at::Tensor v_means2d,                     // [nnz, 2]
-    const at::Tensor v_depths,                      // [nnz]
-    const at::optional<at::Tensor> v_flows2d,       // [nnz, 2] optional
-    const at::Tensor v_conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> v_compensations, // [nnz] optional
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const at::Tensor &v_means2d,                     // [nnz, 2]
+    const at::Tensor &v_depths,                      // [nnz]
+    const at::optional<at::Tensor> &v_flows2d,       // [nnz, 2] optional
+    const at::Tensor &v_conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    bool viewmats_requires_grad,
+    bool sparse_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -558,7 +583,7 @@ projection_ewa_3dgs_packed_bwd(
         image_width,
         image_height,
         eps2d,
-        camera_model,
+        static_cast<CameraModelType>(camera_model),
         // fwd outputs
         batch_ids,
         camera_ids,
@@ -585,6 +610,10 @@ projection_ewa_3dgs_packed_bwd(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats, v_motions);
 }
 
+#endif
+
+#if GSPLAT_BUILD_2DGS
+
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -592,17 +621,17 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_2dgs_fused_fwd(
-    const at::Tensor means,    // [..., N, 3]
-    const at::Tensor quats,    // [..., N, 4]
-    const at::Tensor scales,   // [..., N, 3]
-    const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks,       // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip
+    const at::Tensor &means,    // [..., N, 3]
+    const at::Tensor &quats,    // [..., N, 4]
+    const at::Tensor &scales,   // [..., N, 3]
+    const at::Tensor &viewmats, // [..., C, 4, 4]
+    const at::Tensor &Ks,       // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    double near_plane,
+    double far_plane,
+    double radius_clip
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -661,22 +690,22 @@ projection_2dgs_fused_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
     // fwd inputs
-    const at::Tensor means,    // [..., N, 3]
-    const at::Tensor quats,    // [..., N, 4]
-    const at::Tensor scales,   // [..., N, 3]
-    const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks,       // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
+    const at::Tensor &means,    // [..., N, 3]
+    const at::Tensor &quats,    // [..., N, 4]
+    const at::Tensor &scales,   // [..., N, 3]
+    const at::Tensor &viewmats, // [..., C, 4, 4]
+    const at::Tensor &Ks,       // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [..., C, N, 2]
-    const at::Tensor ray_transforms, // [..., C, N, 3, 3]
+    const at::Tensor &radii,          // [..., C, N, 2]
+    const at::Tensor &ray_transforms, // [..., C, N, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,        // [..., C, N, 2]
-    const at::Tensor v_depths,         // [..., C, N]
-    const at::Tensor v_normals,        // [..., C, N, 3]
-    const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
-    const bool viewmats_requires_grad
+    const at::Tensor &v_means2d,        // [..., C, N, 2]
+    const at::Tensor &v_depths,         // [..., C, N]
+    const at::Tensor &v_normals,        // [..., C, N, 3]
+    const at::Tensor &v_ray_transforms, // [..., C, N, 3, 3]
+    bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -736,16 +765,16 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_2dgs_packed_fwd(
-    const at::Tensor means,    // [..., N, 3]
-    const at::Tensor quats,    // [..., N, 4]
-    const at::Tensor scales,   // [..., N, 3]
-    const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks,       // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip
+    const at::Tensor &means,    // [..., N, 3]
+    const at::Tensor &quats,    // [..., N, 4]
+    const at::Tensor &scales,   // [..., N, 3]
+    const at::Tensor &viewmats, // [..., C, 4, 4]
+    const at::Tensor &Ks,       // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double near_plane,
+    double far_plane,
+    double radius_clip
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -857,25 +886,25 @@ projection_2dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,    // [..., N, 3]
-    const at::Tensor quats,    // [..., N, 4]
-    const at::Tensor scales,   // [..., N, 3]
-    const at::Tensor viewmats, // [..., C, 4, 4]
-    const at::Tensor Ks,       // [..., C, 3, 3]
-    const uint32_t image_width,
-    const uint32_t image_height,
+    const at::Tensor &means,    // [..., N, 3]
+    const at::Tensor &quats,    // [..., N, 4]
+    const at::Tensor &scales,   // [..., N, 3]
+    const at::Tensor &viewmats, // [..., C, 4, 4]
+    const at::Tensor &Ks,       // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
     // fwd outputs
-    const at::Tensor batch_ids,      // [nnz]
-    const at::Tensor camera_ids,     // [nnz]
-    const at::Tensor gaussian_ids,   // [nnz]
-    const at::Tensor ray_transforms, // [nnz, 3, 3]
+    const at::Tensor &batch_ids,      // [nnz]
+    const at::Tensor &camera_ids,     // [nnz]
+    const at::Tensor &gaussian_ids,   // [nnz]
+    const at::Tensor &ray_transforms, // [nnz, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,        // [nnz, 2]
-    const at::Tensor v_depths,         // [nnz]
-    const at::Tensor v_ray_transforms, // [nnz, 3, 3]
-    const at::Tensor v_normals,        // [nnz, 3]
-    const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const at::Tensor &v_means2d,        // [nnz, 2]
+    const at::Tensor &v_depths,         // [nnz]
+    const at::Tensor &v_ray_transforms, // [nnz, 3, 3]
+    const at::Tensor &v_normals,        // [nnz, 3]
+    bool viewmats_requires_grad,
+    bool sparse_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -942,13 +971,17 @@ projection_2dgs_packed_bwd(
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
 
+#endif
+
+#if GSPLAT_BUILD_3DGUT
+
 std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ut_3dgs_fused(
+projection_ut_3dgs_fused_impl(
     const at::Tensor means,                   // [..., N, 3]
     const at::Tensor quats,                   // [..., N, 4]
     const at::Tensor scales,                  // [..., N, 3]
@@ -964,13 +997,16 @@ projection_ut_3dgs_fused(
     const float radius_clip,
     const bool calc_compensations,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs // shared parameters for all cameras
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -992,6 +1028,13 @@ projection_ut_3dgs_fused(
     }
     if (thin_prism_coeffs.has_value()) {
         CHECK_INPUT(thin_prism_coeffs.value());
+    }
+
+    if (external_distortion_params.has_value()) {
+        CHECK_INPUT(external_distortion_params.value()->horizontal_poly);
+        CHECK_INPUT(external_distortion_params.value()->vertical_poly);
+        CHECK_INPUT(external_distortion_params.value()->horizontal_poly_inverse); // Could be omitted for projection
+        CHECK_INPUT(external_distortion_params.value()->vertical_poly_inverse); // Could be omitted for projection
     }
 
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -1039,6 +1082,7 @@ projection_ut_3dgs_fused(
         far_plane,
         radius_clip,
         camera_model,
+        global_z_order,
         // uncented transform
         ut_params,
         rs_type,
@@ -1046,6 +1090,8 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params,
         // outputs
         radii,
         means2d,
@@ -1056,5 +1102,67 @@ projection_ut_3dgs_fused(
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_ut_3dgs_fused(
+    const at::Tensor &means,                   // [..., N, 3]
+    const at::Tensor &quats,                   // [..., N, 4]
+    const at::Tensor &scales,                  // [..., N, 3]
+    const at::optional<at::Tensor> &opacities, // [..., N] optional
+    const at::Tensor &viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor &Ks,                      // [..., C, 3, 3]
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    double near_plane,
+    double far_plane,
+    double radius_clip,
+    bool calc_compensations,
+    int64_t camera_model,
+    bool global_z_order,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
+) {
+    return projection_ut_3dgs_fused_impl(
+        means,
+        quats,
+        scales,
+        opacities,
+        viewmats0,
+        viewmats1,
+        Ks,
+        image_width,
+        image_height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        calc_compensations,
+        static_cast<CameraModelType>(camera_model),
+        global_z_order,
+        ut_params,
+        static_cast<ShutterType>(rs_type),
+        radial_coeffs,
+        tangential_coeffs,
+        thin_prism_coeffs,
+        ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params
+    );
+}
+
+#endif
 
 } // namespace gsplat

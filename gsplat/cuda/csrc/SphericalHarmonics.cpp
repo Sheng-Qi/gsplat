@@ -1,3 +1,21 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
@@ -13,10 +31,10 @@
 namespace gsplat {
 
 at::Tensor spherical_harmonics_fwd(
-    const uint32_t degrees_to_use,
-    const at::Tensor dirs,               // [..., 3]
-    const at::Tensor coeffs,             // [..., K, 3]
-    const at::optional<at::Tensor> masks // [...]
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., 3]
+    const at::Tensor &coeffs,             // [..., K, 3]
+    const at::optional<at::Tensor> &masks // [...]
 ) {
     DEVICE_GUARD(dirs);
     CHECK_INPUT(dirs);
@@ -36,12 +54,12 @@ at::Tensor spherical_harmonics_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
-    const uint32_t K,
-    const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., 3]
-    const at::Tensor coeffs,              // [..., K, 3]
-    const at::optional<at::Tensor> masks, // [...]
-    const at::Tensor v_colors,            // [..., 3]
+    int64_t K,
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,                // [..., 3]
+    const at::Tensor &coeffs,              // [..., K, 3]
+    const at::optional<at::Tensor> &masks, // [...]
+    const at::Tensor &v_colors,            // [..., 3]
     bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
