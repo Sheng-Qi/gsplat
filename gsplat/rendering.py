@@ -748,7 +748,7 @@ def rasterization(
             far_plane=far_plane,
             radius_clip=radius_clip,
             sparse_grad=sparse_grad,
-            calc_flows2d=calc_flow2d,
+            calc_flows2d=render_mode_has_flow(render_mode),
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
