@@ -8,12 +8,11 @@ namespace gsplat_bridge {
 
 enum class SplatMode {
     COLOR = 0,
-    FLOW = 1,
-    MOTION_HEATMAP = 2,
-    T_SCALE_HEATMAP = 3,
-    OPACITY_HEATMAP = 4,
-    SCALE_HEATMAP = 5,
-    FLOW_MAP = 6
+    MOTION_HEATMAP = 1,
+    T_SCALE_HEATMAP = 2,
+    OPACITY_HEATMAP = 3,
+    SCALE_HEATMAP = 4,
+    FLOW_MAP = 5
 };
 
 // Gaussian Splatting scene data
