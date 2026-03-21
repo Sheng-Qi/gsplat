@@ -20,17 +20,16 @@ set(BRIDGE_SOURCES
     gsplat_bridge.cpp
 )
 
-add_library(CudaRasterizer_gsplat STATIC ${GSPLAT_SOURCES} ${BRIDGE_SOURCES})
-set_target_properties(CudaRasterizer_gsplat PROPERTIES CXX_STANDARD 20 CUDA_STANDARD 20)
+add_library(CudaRasterizer STATIC ${GSPLAT_SOURCES} ${BRIDGE_SOURCES})
+set_target_properties(CudaRasterizer PROPERTIES CXX_STANDARD 20 CUDA_STANDARD 20)
 
-target_include_directories(CudaRasterizer_gsplat
+target_include_directories(CudaRasterizer
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE ../gsplat/cuda/csrc
     PRIVATE ../gsplat/cuda/include
     PRIVATE ../gsplat/cuda/csrc/third_party/glm
 )
 
-target_link_libraries(CudaRasterizer_gsplat PUBLIC ${TORCH_LIBRARIES})
-add_library(CudaRasterizer ALIAS CudaRasterizer_gsplat)
+target_link_libraries(CudaRasterizer PUBLIC ${TORCH_LIBRARIES})
 string(REPLACE "-std=c++17" "-std=c++20" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
 string(REPLACE "-std=c++14" "-std=c++20" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
