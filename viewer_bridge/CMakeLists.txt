@@ -27,6 +27,11 @@ set(BRIDGE_SOURCES
 add_library(CudaRasterizer STATIC ${GSPLAT_SOURCES} ${BRIDGE_SOURCES})
 set_target_properties(CudaRasterizer PROPERTIES CXX_STANDARD 20 CUDA_STANDARD 20)
 
+# Torch injects -std=c++17 through usage requirements in some environments.
+# Append explicit standard flags here so nvcc/g++ end on C++20.
+set_property(TARGET CudaRasterizer APPEND_STRING PROPERTY COMPILE_FLAGS " -std=c++20")
+set_property(TARGET CudaRasterizer APPEND_STRING PROPERTY CUDA_NVCC_FLAGS " --std=c++20")
+
 target_include_directories(CudaRasterizer
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE ../gsplat/cuda/csrc
