@@ -3,12 +3,16 @@ project(gsplat_viewer_bridge LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 list(APPEND CMAKE_PREFIX_PATH "/home/shengqi/miniconda3/lib/python3.13/site-packages/torch/share/cmake")
 find_package(Torch REQUIRED)
 
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -std=c++20 --expt-relaxed-constexpr -O3 --forward-unknown-opts")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr -O3 --forward-unknown-opts")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fopenmp -DAT_PARALLEL_OPENMP")
 
 file(GLOB GSPLAT_SOURCES
@@ -31,5 +35,3 @@ target_include_directories(CudaRasterizer
 )
 
 target_link_libraries(CudaRasterizer PUBLIC ${TORCH_LIBRARIES})
-string(REPLACE "-std=c++17" "-std=c++20" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-string(REPLACE "-std=c++14" "-std=c++20" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
